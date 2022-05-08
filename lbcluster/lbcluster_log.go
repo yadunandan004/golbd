@@ -4,104 +4,164 @@ import (
 	"fmt"
 	"log/syslog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
+const (
+	DefaultLbdTag   = "lbd"
+	logLevelInfo    = "INFO"
+	logLevelDebug   = "DEBUG"
+	logLevelWarning = "WARNING"
+	logLevelError   = "ERROR"
+)
+
 //Log struct for the log
 type Log struct {
-	SyslogWriter *syslog.Writer
-	Stdout       bool
-	Debugflag    bool
-	TofilePath   string
-	logMu        sync.Mutex
+	logWriter         *syslog.Writer
+	shouldWriteToSTD  bool
+	isDebugAllowed    bool
+	filePath          string
+	logMu             sync.Mutex
+	logStartTime      time.Time
+	isSnapShotEnabled bool
+	snapShotCycleTime time.Duration
+	logFileBasePath   string
+	logFileExtension  string
 }
 
 //Logger struct for the Logger interface
 type Logger interface {
-	Info(s string) error
-	Warning(s string) error
-	Debug(s string) error
-	Error(s string) error
+	EnableDebugMode()
+	EnableWriteToSTd()
+	StartSnapshot(d time.Duration)
+	GetLogFilePath() string
+	Info(s string)
+	Warning(s string)
+	Debug(s string)
+	Error(s string)
 }
 
-//Write_to_log put something in the log file
-func (lbc *LBCluster) Write_to_log(level string, msg string) error {
-
-	myMessage := "cluster: " + lbc.Cluster_name + " " + msg
-
-	if level == "INFO" {
-		lbc.Slog.Info(myMessage)
-	} else if level == "DEBUG" {
-		lbc.Slog.Debug(myMessage)
-	} else if level == "WARNING" {
-		lbc.Slog.Warning(myMessage)
-	} else if level == "ERROR" {
-		lbc.Slog.Error(myMessage)
-	} else {
-		lbc.Slog.Error("LEVEL " + level + " NOT UNDERSTOOD, ASSUMING ERROR " + myMessage)
+func NewLoggerFactory(logFilePath string) (Logger, error) {
+	log, err := syslog.New(syslog.LOG_NOTICE, DefaultLbdTag)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(logFilePath, "") {
+		return nil, fmt.Errorf("empty log file path")
+	}
+	_, err = os.OpenFile(logFilePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0640)
+	if err != nil {
+		return nil, err
+	}
+	basePath, extension, err := getLogFilePathAndExtension(logFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("error while validating log file path. error: %v", err)
 	}
 
-	return nil
+	if !isLogFilePathValid(basePath, extension) {
+		return nil, fmt.Errorf("invalid log file path. log path: %s", logFilePath)
+	}
+	return &Log{
+			logWriter:        log,
+			logStartTime:     time.Now(),
+			filePath:         logFilePath,
+			logFileBasePath:  basePath,
+			logFileExtension: extension,
+		},
+		nil
+}
+
+func isLogFilePathValid(basePath, extension string) bool {
+	return !strings.EqualFold(basePath, "") && !strings.EqualFold(extension, "")
+}
+
+func getLogFilePathAndExtension(logFilePath string) (string, string, error) {
+	matcher := regexp.MustCompile(`(.*)\.(.*)`)
+	matchGroups := matcher.FindAllStringSubmatch(logFilePath, -1)
+	if len(matchGroups) == 0 || len(matchGroups[0]) < 3 {
+		return "", "", fmt.Errorf("log file path is not in the right format. path: %s", logFilePath)
+	}
+	return matchGroups[0][1], matchGroups[0][2], nil
+}
+
+func (l *Log) EnableDebugMode() {
+	l.isDebugAllowed = true
+}
+
+func (l *Log) EnableWriteToSTd() {
+	l.shouldWriteToSTD = true
+}
+
+func (l *Log) StartSnapshot(d time.Duration) {
+	if !l.isSnapShotEnabled {
+		l.isSnapShotEnabled = true
+		l.snapShotCycleTime = d
+		l.startSnapShot()
+	}
+}
+
+func (l *Log) GetLogFilePath() string {
+	return l.filePath
+}
+func (l *Log) startSnapShot() {
+	l.logStartTime = time.Now()
+	l.filePath = fmt.Sprintf("%s_%s.%s", l.logFileBasePath, l.getFileNameTimeSuffix(), l.logFileExtension)
+}
+
+func (l *Log) getFileNameTimeSuffix() string {
+	return fmt.Sprintf("%v_%v_%v-%v_%v_%v", l.logStartTime.Year(), l.logStartTime.Month(), l.logStartTime.Day(), l.logStartTime.Hour(), l.logStartTime.Minute(), l.logStartTime.Second())
+}
+
+func (l *Log) shouldStartNewSnapshot() bool {
+	return time.Now().Sub(l.logStartTime) >= l.snapShotCycleTime
 }
 
 //Info write as Info
-func (l *Log) Info(s string) error {
-	var err error
-	if l.SyslogWriter != nil {
-		err = l.SyslogWriter.Info(s)
+func (l *Log) Info(s string) {
+	if l.logWriter != nil {
+		_ = l.logWriter.Info(s)
 	}
-	if l.Stdout || (l.TofilePath != "") {
-		err = l.writefilestd("INFO: " + s)
+	if l.shouldWriteToSTD || (l.filePath != "") {
+		l.write(fmt.Sprintf("%s: %s", logLevelInfo, s))
 	}
-	return err
-
 }
 
 //Warning write as Warning
-func (l *Log) Warning(s string) error {
-	var err error
-	if l.SyslogWriter != nil {
-		err = l.SyslogWriter.Warning(s)
+func (l *Log) Warning(s string) {
+	if l.logWriter != nil {
+		_ = l.logWriter.Warning(s)
 	}
-	if l.Stdout || (l.TofilePath != "") {
-		err = l.writefilestd("WARNING: " + s)
+	if l.shouldWriteToSTD || (l.filePath != "") {
+		l.write(fmt.Sprintf("%s: %s", logLevelWarning, s))
 	}
-	return err
-
 }
 
 //Debug write as Debug
-func (l *Log) Debug(s string) error {
-	var err error
-	if l.Debugflag {
-		if l.SyslogWriter != nil {
-			err = l.SyslogWriter.Debug(s)
+func (l *Log) Debug(s string) {
+	if l.isDebugAllowed {
+		if l.logWriter != nil {
+			_ = l.logWriter.Debug(s)
 		}
-		if l.Stdout || (l.TofilePath != "") {
-			err = l.writefilestd("DEBUG: " + s)
+		if l.shouldWriteToSTD || (l.filePath != "") {
+			l.write(fmt.Sprintf("%s: %s", logLevelDebug, s))
 		}
 	}
-	return err
-
 }
 
 //Error write as Error
-func (l *Log) Error(s string) error {
-	var err error
-	if l.SyslogWriter != nil {
-		err = l.SyslogWriter.Err(s)
+func (l *Log) Error(s string) {
+	if l.logWriter != nil {
+		_ = l.logWriter.Err(s)
 	}
-	if l.Stdout || (l.TofilePath != "") {
-		err = l.writefilestd("ERROR: " + s)
+	if l.shouldWriteToSTD || (l.filePath != "") {
+		l.write(fmt.Sprintf("%s: %s", logLevelError, s))
 	}
-	return err
-
 }
 
-func (l *Log) writefilestd(s string) error {
-	var err error
+func (l *Log) write(s string) {
 	tag := "lbd"
 	nl := ""
 	if !strings.HasSuffix(s, "\n") {
@@ -111,18 +171,23 @@ func (l *Log) writefilestd(s string) error {
 	msg := fmt.Sprintf("%s %s[%d]: %s%s",
 		timestamp,
 		tag, os.Getpid(), s, nl)
+	if l.shouldWriteToSTD {
+		fmt.Printf(msg)
+	}
 	l.logMu.Lock()
 	defer l.logMu.Unlock()
-	if l.Stdout {
-		_, err = fmt.Printf(msg)
+
+	if l.shouldStartNewSnapshot() {
+		l.startSnapShot()
 	}
-	if l.TofilePath != "" {
-		f, err := os.OpenFile(l.TofilePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0640)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = fmt.Fprintf(f, msg)
+	f, err := os.OpenFile(l.filePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0640)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "error while opening the log file. error: %v", err)
+		return
 	}
-	return err
+	defer f.Close()
+	_, err = fmt.Fprintf(f, msg)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "error while writing to the log file. error: %v", err)
+	}
 }

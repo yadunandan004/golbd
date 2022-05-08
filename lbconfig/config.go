@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"lb-experts/golbd/lbcluster"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
-
-	"gitlab.cern.ch/lb-experts/golbd/lbcluster"
 )
 
 // Config this is the configuration of the lbd
@@ -46,7 +45,7 @@ func readLines(path string) (lines []string, err error) {
 }
 
 //LoadClusters checks the syntax of the clusters defined in the configuration file
-func LoadClusters(config *Config, lg *lbcluster.Log) ([]lbcluster.LBCluster, error) {
+func LoadClusters(config *Config, lg lbcluster.Logger) ([]lbcluster.LBCluster, error) {
 	var lbc lbcluster.LBCluster
 	var lbcs []lbcluster.LBCluster
 
@@ -67,7 +66,7 @@ func LoadClusters(config *Config, lg *lbcluster.Log) ([]lbcluster.LBCluster, err
 			}
 			lbc.Host_metric_table = hm
 			lbcs = append(lbcs, lbc)
-			lbc.Write_to_log("INFO", "(re-)loaded cluster ")
+			lbc.Slog.Info("(re-)loaded cluster ")
 
 		} else {
 			lg.Warning("cluster: " + k + " missing parameters for cluster; ignoring the cluster, please check the configuration file " + config.ConfigFile)
@@ -79,7 +78,7 @@ func LoadClusters(config *Config, lg *lbcluster.Log) ([]lbcluster.LBCluster, err
 }
 
 //LoadConfig reads a configuration file and returns a struct with the config
-func LoadConfig(configFile string, lg *lbcluster.Log) (*Config, []lbcluster.LBCluster, error) {
+func LoadConfig(configFile string, lg lbcluster.Logger) (*Config, []lbcluster.LBCluster, error) {
 	var (
 		config Config
 		p      lbcluster.Params
