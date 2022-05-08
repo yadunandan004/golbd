@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"lb-experts/golbd/lbcluster"
+	"lb-experts/golbd/lbconfig"
 	"log/syslog"
 	"math/rand"
 	"os"
@@ -14,8 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"gitlab.cern.ch/lb-experts/golbd/lbcluster"
-	"gitlab.cern.ch/lb-experts/golbd/lbconfig"
 	"gitlab.cern.ch/lb-experts/golbd/lbhost"
 )
 
@@ -39,7 +39,7 @@ var (
 
 const itCSgroupDNSserver string = "cfmgr.cern.ch"
 
-func shouldUpdateDNS(config *lbconfig.Config, hostname string, lg *lbcluster.Log) bool {
+func shouldUpdateDNS(config *lbconfig.Config, hostname string, lg lbcluster.Logger) bool {
 	if hostname == config.Master {
 		return true
 	}
@@ -82,7 +82,7 @@ func shouldUpdateDNS(config *lbconfig.Config, hostname string, lg *lbcluster.Log
 
 }
 
-func updateHeartbeat(config *lbconfig.Config, hostname string, lg *lbcluster.Log) error {
+func updateHeartbeat(config *lbconfig.Config, hostname string, lg lbcluster.Logger) error {
 	if hostname != config.Master {
 		return nil
 	}
@@ -166,19 +166,27 @@ func main() {
 		os.Exit(0)
 	}
 	rand.Seed(time.Now().UTC().UnixNano())
-	log, e := syslog.New(syslog.LOG_NOTICE, "lbd")
 
-	if e != nil {
-		fmt.Printf("Error getting a syslog instance %v\nThe service will only write to the logfile %v\n\n", e, *logFileFlag)
+	lg,err := lbcluster.NewLoggerFactory(*logFileFlag)
+	if err != nil {
+		fmt.Printf("error during log initialization. error: %v",err)
+		os.Exit(1)
 	}
-	lg := lbcluster.Log{SyslogWriter: log, Stdout: *stdoutFlag, Debugflag: *debugFlag, TofilePath: *logFileFlag}
+
+	if *stdoutFlag {
+		lg.EnableWriteToSTd()
+	}
+
+	if *debugFlag{
+		lg.EnableDebugMode()
+	}
 
 	lg.Info("Starting lbd")
 
 	//	var sig_hup, sig_term bool
 	// installSignalHandler(&sig_hup, &sig_term, &lg)
 
-	config, lbclusters, err := lbconfig.LoadConfig(*configFileFlag, &lg)
+	config, lbclusters, err := lbconfig.LoadConfig(*configFileFlag, lg)
 	if err != nil {
 		lg.Warning("loadConfig Error: ")
 		lg.Warning(err.Error())
@@ -207,7 +215,8 @@ func main() {
 	lg.Error("The lbd is not supposed to stop")
 
 }
-func checkAliases(config *lbconfig.Config, lg lbcluster.Log, lbclusters []lbcluster.LBCluster) {
+
+func checkAliases(config *lbconfig.Config, lg lbcluster.Logger, lbclusters []lbcluster.LBCluster) {
 	hostname, e := os.Hostname()
 	if e == nil {
 		lg.Info("Hostname: " + hostname)
@@ -221,9 +230,9 @@ func checkAliases(config *lbconfig.Config, lg lbcluster.Log, lbclusters []lbclus
 	/* First, let's identify the hosts that have to be checked */
 	for i := range lbclusters {
 		pc := &lbclusters[i]
-		pc.Write_to_log("DEBUG", "DO WE HAVE TO UPDATE?")
+		lg.Debug("DO WE HAVE TO UPDATE?")
 		if pc.Time_to_refresh() {
-			pc.Write_to_log("INFO", "Time to refresh the cluster")
+			lg.Info("Time to refresh the cluster")
 			pc.Get_list_hosts(hostsToCheck)
 			clustersToUpdate = append(clustersToUpdate, pc)
 		}
@@ -245,26 +254,26 @@ func checkAliases(config *lbconfig.Config, lg lbcluster.Log, lbclusters []lbclus
 
 		lg.Debug("All the hosts have been tested")
 
-		updateDNS = shouldUpdateDNS(config, hostname, &lg)
+		updateDNS = shouldUpdateDNS(config, hostname, lg)
 
 		/* Finally, let's go through the aliases, selecting the best hosts*/
 		for _, pc := range clustersToUpdate {
-			pc.Write_to_log("DEBUG", "READY TO UPDATE THE CLUSTER")
+			lg.Debug("READY TO UPDATE THE CLUSTER")
 			if pc.FindBestHosts(hostsToCheck) {
 				if updateDNS {
-					pc.Write_to_log("DEBUG", "Should update dns is true")
+					lg.Debug( "Should update dns is true")
 					pc.RefreshDNS(config.DNSManager, config.TsigKeyPrefix, config.TsigInternalKey, config.TsigExternalKey)
 				} else {
-					pc.Write_to_log("DEBUG", "should_update_dns false")
+					lg.Debug( "should_update_dns false")
 				}
 			} else {
-				pc.Write_to_log("DEBUG", "FindBestHosts false")
+				lg.Debug( "FindBestHosts false")
 			}
 		}
 	}
 
 	if updateDNS {
-		updateHeartbeat(config, hostname, &lg)
+		updateHeartbeat(config, hostname, lg)
 	}
 
 	lg.Debug("iteration done!")
