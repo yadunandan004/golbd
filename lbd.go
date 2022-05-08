@@ -167,32 +167,32 @@ func main() {
 	}
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	lg,err := lbcluster.NewLoggerFactory(*logFileFlag)
+	logger, err := lbcluster.NewLoggerFactory(*logFileFlag)
 	if err != nil {
-		fmt.Printf("error during log initialization. error: %v",err)
+		fmt.Printf("error during log initialization. error: %v", err)
 		os.Exit(1)
 	}
 
 	if *stdoutFlag {
-		lg.EnableWriteToSTd()
+		logger.EnableWriteToSTd()
 	}
 
-	if *debugFlag{
-		lg.EnableDebugMode()
+	if *debugFlag {
+		logger.EnableDebugMode()
 	}
 
-	lg.Info("Starting lbd")
+	logger.Info("Starting lbd")
 
 	//	var sig_hup, sig_term bool
-	// installSignalHandler(&sig_hup, &sig_term, &lg)
+	// installSignalHandler(&sig_hup, &sig_term, &logger)
 
-	config, lbclusters, err := lbconfig.LoadConfig(*configFileFlag, lg)
+	config, lbclusters, err := lbconfig.LoadConfig(*configFileFlag, logger)
 	if err != nil {
-		lg.Warning("loadConfig Error: ")
-		lg.Warning(err.Error())
+		logger.Warning("loadConfig Error: ")
+		logger.Warning(err.Error())
 		os.Exit(1)
 	}
-	lg.Info("Clusters loaded")
+	logger.Info("Clusters loaded")
 
 	doneChan := make(chan int)
 	go watchFile(*configFileFlag, doneChan)
@@ -201,19 +201,18 @@ func main() {
 	for {
 		myValue := <-doneChan
 		if myValue == 1 {
-			lg.Info("Config Changed")
-			config, lbclusters, err = lbconfig.LoadConfig(*configFileFlag, &lg)
+			logger.Info("Config Changed")
+			config, lbclusters, err = lbconfig.LoadConfig(*configFileFlag, &logger)
 			if err != nil {
-				lg.Error(fmt.Sprintf("Error getting the clusters (something wrong in %v", configFileFlag))
+				logger.Error(fmt.Sprintf("Error getting the clusters (something wrong in %v", configFileFlag))
 			}
 		} else if myValue == 2 {
-			checkAliases(config, lg, lbclusters)
+			checkAliases(config, logger, lbclusters)
 		} else {
-			lg.Error("Got an unexpected value")
+			logger.Error("Got an unexpected value")
 		}
 	}
-	lg.Error("The lbd is not supposed to stop")
-
+	logger.Error("The lbd is not supposed to stop")
 }
 
 func checkAliases(config *lbconfig.Config, lg lbcluster.Logger, lbclusters []lbcluster.LBCluster) {
@@ -261,13 +260,13 @@ func checkAliases(config *lbconfig.Config, lg lbcluster.Logger, lbclusters []lbc
 			lg.Debug("READY TO UPDATE THE CLUSTER")
 			if pc.FindBestHosts(hostsToCheck) {
 				if updateDNS {
-					lg.Debug( "Should update dns is true")
+					lg.Debug("Should update dns is true")
 					pc.RefreshDNS(config.DNSManager, config.TsigKeyPrefix, config.TsigInternalKey, config.TsigExternalKey)
 				} else {
-					lg.Debug( "should_update_dns false")
+					lg.Debug("should_update_dns false")
 				}
 			} else {
-				lg.Debug( "FindBestHosts false")
+				lg.Debug("FindBestHosts false")
 			}
 		}
 	}
