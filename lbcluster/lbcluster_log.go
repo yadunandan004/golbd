@@ -18,6 +18,8 @@ type Log struct {
 	logMu        sync.Mutex
 }
 
+// todo: refractor logging and consider log based snapshots
+// todo: consider start and end times of dns updates
 //Logger struct for the Logger interface
 type Logger interface {
 	Info(s string) error
@@ -29,7 +31,7 @@ type Logger interface {
 //Write_to_log put something in the log file
 func (lbc *LBCluster) Write_to_log(level string, msg string) error {
 
-	myMessage := "cluster: " + lbc.Cluster_name + " " + msg
+	myMessage := "cluster: " + lbc.ClusterConfig.Cluster_name + " " + msg
 
 	if level == "INFO" {
 		lbc.Slog.Info(myMessage)
